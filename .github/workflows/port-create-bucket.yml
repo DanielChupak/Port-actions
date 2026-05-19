@@ -19,42 +19,51 @@ jobs:
   createResource:
     runs-on: ubuntu-latest
     steps:
-      # Checkout the workflow's repository
       - uses: actions/checkout@v4
-      # Checkout the service's repository
-      - uses: actions/checkout@v4
-        with:
-          repository: "${{ fromJson(inputs.port_context).entity }}"
-          path: ./targetRepo
-          token: ${{ secrets.ORG_ADMIN_TOKEN }}
-      - name: Copy template file
+
+      - name: Create Terraform file from template
         run: |
-          mkdir -p ./targetRepo/resources
-          cp templates/cloudResource.tf ./targetRepo/resources/${{ inputs.name }}.tf
-      - name: Update new file data
-        run: |
-          sed -i 's/{{ bucket_name }}/${{ inputs.name }}/g' ./targetRepo/resources/${{ inputs.name }}.tf
-          # Map public -> publicRead for GCS, private stays private
+          mkdir -p resources
+          cp templates/cloudResource.tf resources/${{ inputs.name }}.tf
+          sed -i 's/{{ bucket_name }}/${{ inputs.name }}/g' resources/${{ inputs.name }}.tf
           if [ "${{ inputs.visibility }}" = "public" ]; then
-            sed -i 's/{{ bucket_acl }}/publicRead/g' ./targetRepo/resources/${{ inputs.name }}.tf
+            sed -i 's/{{ bucket_acl }}/publicRead/g' resources/${{ inputs.name }}.tf
           else
-            sed -i 's/{{ bucket_acl }}/private/g' ./targetRepo/resources/${{ inputs.name }}.tf
+            sed -i 's/{{ bucket_acl }}/private/g' resources/${{ inputs.name }}.tf
           fi
-      - name: Open a pull request
-        uses: peter-evans/create-pull-request@v5
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
         with:
-          token: ${{ secrets.ORG_ADMIN_TOKEN }}
-          path: ./targetRepo
-          commit-message: Create new GCS bucket - ${{ inputs.name }}
-          committer: GitHub <noreply@github.com>
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-          signoff: false
-          branch: new-resource-${{ inputs.name }}
-          delete-branch: true
-          title: Create new GCS bucket - ${{ inputs.name }}
-          body: |
-            Create new ${{ inputs.visibility }} GCS bucket - ${{ inputs.name }}
-          draft: false
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Create GCP provider file
+        run: |
+          cat > resources/provider.tf << EOF
+          terraform {
+            required_providers {
+              google = {
+                source  = "hashicorp/google"
+                version = "~> 5.0"
+              }
+            }
+          }
+          provider "google" {
+            project = "${{ secrets.GCP_PROJECT_ID }}"
+            region  = "europe-west1"
+          }
+          EOF
+
+      - name: Terraform Init
+        working-directory: resources
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: resources
+        run: terraform apply -auto-approve
 
   create-entity-in-port-and-update-run:
     runs-on: ubuntu-latest
@@ -82,4 +91,4 @@ jobs:
           baseUrl: https://api.port.io
           operation: PATCH_RUN
           runId: ${{ fromJson(inputs.port_context).runId }}
-          logMessage: Pull request created successfully for GCS bucket "${{ inputs.name }}" 🚀
+          logMessage: GCS bucket "${{ inputs.name }}" created successfully 🚀
