@@ -1,5 +1,4 @@
 name: Create GCS bucket
-
 on:
   workflow_dispatch:
     inputs:
@@ -14,13 +13,11 @@ on:
         required: true
         description: The visibility of the new GCS bucket (public or private)
         type: string
-
 jobs:
   createResource:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Create Terraform file from template
         run: |
           mkdir -p resources
@@ -31,15 +28,12 @@ jobs:
           else
             sed -i 's/{{ bucket_acl }}/private/g' resources/${{ inputs.name }}.tf
           fi
-
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
-
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-
       - name: Create GCP provider file
         run: |
           cat > resources/provider.tf << EOF
@@ -56,11 +50,9 @@ jobs:
             region  = "europe-west1"
           }
           EOF
-
       - name: Terraform Init
         working-directory: resources
         run: terraform init
-
       - name: Terraform Apply
         working-directory: resources
         run: terraform apply -auto-approve
@@ -69,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: createResource
     steps:
-      - name: UPSERT Entity
+      - name: UPSERT Repository Entity
         uses: port-labs/port-github-action@v1
         with:
           identifier: ${{ fromJson(inputs.port_context).entity }}
@@ -83,7 +75,29 @@ jobs:
           baseUrl: https://api.port.io
           operation: UPSERT
           runId: ${{ fromJson(inputs.port_context).runId }}
-      - name: Create a log message
+      - name: UPSERT GCS Bucket Entity
+        uses: port-labs/port-github-action@v1
+        with:
+          identifier: ${{ inputs.name }}
+          title: ${{ inputs.name }}
+          blueprint: gcsBucket
+          properties: |-
+            {
+              "location": "EU",
+              "visibility": "${{ inputs.visibility }}",
+              "project": "${{ secrets.GCP_PROJECT_ID }}",
+              "url": "https://console.cloud.google.com/storage/browser/${{ inputs.name }}"
+            }
+          relations: |-
+            {
+              "repository": "${{ fromJson(inputs.port_context).entity }}"
+            }
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.port.io
+          operation: UPSERT
+          runId: ${{ fromJson(inputs.port_context).runId }}
+      - name: Update run status
         uses: port-labs/port-github-action@v1
         with:
           clientId: ${{ secrets.PORT_CLIENT_ID }}
@@ -91,4 +105,5 @@ jobs:
           baseUrl: https://api.port.io
           operation: PATCH_RUN
           runId: ${{ fromJson(inputs.port_context).runId }}
+          status: "SUCCESS"
           logMessage: GCS bucket "${{ inputs.name }}" created successfully 🚀
